@@ -46,9 +46,9 @@ export function mapColorTrc(colorTrc: VideoTransferCharacteristics) {
   return colorTrcMap[colorTrc] ?? AVColorTransferCharacteristic.AVCOL_TRC_BT709
 }
 
-export async function videoFrame2AVFrame(videoFrame: VideoFrame, avframe: pointer<AVFrame> = nullptr) {
+export async function videoFrame2AVFrame<T extends pointer<AVFrame> = pointer<AVFrame>>(videoFrame: VideoFrame, avframe: T = nullptr) {
   if (avframe === nullptr) {
-    avframe = createAVFrame()
+    avframe = createAVFrame() as T
   }
   else {
     unrefAVFrame(avframe)
@@ -91,5 +91,5 @@ export async function videoFrame2AVFrame(videoFrame: VideoFrame, avframe: pointe
     layout
   })
 
-  return avframe
+  return avframe as T
 }

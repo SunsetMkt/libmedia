@@ -53,9 +53,9 @@ function mapFormat(format: AudioSampleFormat) {
   }
 }
 
-export function audioData2AVFrame(audioData: AudioData, avframe: pointer<AVFrame> = nullptr) {
+export function audioData2AVFrame<T extends pointer<AVFrame> = pointer<AVFrame>>(audioData: AudioData, avframe: T = nullptr) {
   if (avframe === nullptr) {
-    avframe = createAVFrame()
+    avframe = createAVFrame() as T
   }
 
   avframe.sampleRate = audioData.sampleRate
@@ -78,5 +78,5 @@ export function audioData2AVFrame(audioData: AudioData, avframe: pointer<AVFrame
     })
   }
 
-  return avframe
+  return avframe as T
 }

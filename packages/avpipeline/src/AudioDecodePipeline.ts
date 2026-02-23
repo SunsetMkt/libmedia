@@ -116,7 +116,7 @@ export default class AudioDecodePipeline extends Pipeline {
       },
       onReceiveAudioData(audioData) {
         const avframe = audioData2AVFrame(audioData, task.avframePool.alloc())
-        task.frameCaches.push(reinterpret_cast<pointer<AVFrameRef>>(avframe))
+        task.frameCaches.push(avframe)
         task.stats.audioFrameDecodeCount++
         task.stats.audioFrameDecodeIntervalMax = Math.max(
           getTimestamp() - task.lastDecodeTimestamp,
