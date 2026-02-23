@@ -363,6 +363,10 @@ export default class IMp3Format extends IFormat {
 
       frameHeader.parse(mp3Context.frameHeader, await formatContext.ioReader.peekUint32())
 
+      if (mp3Context.frameHeader.layer === 0 || mp3Context.frameHeader.version === 1) {
+        return errorType.DATA_INVALID
+      }
+
       const frameLength = frameHeader.getFrameLength(mp3Context.frameHeader, stream.codecpar.sampleRate)
       const frameSize = mp3.getFrameSizeByVersionLayer(mp3Context.frameHeader.version, mp3Context.frameHeader.layer)
 
