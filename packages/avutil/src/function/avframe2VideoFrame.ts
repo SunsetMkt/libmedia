@@ -25,9 +25,9 @@
 
 import type AVFrame from '../struct/avframe'
 import { getAVPixelFormatDescriptor } from '../pixelFormatDescriptor'
-import { AVColorRange, type AVPixelFormat } from '../pixfmt'
+import { AVColorRange, AVPixelFormat } from '../pixfmt'
 import { avRescaleQ2 } from '../util/rational'
-import { AV_TIME_BASE_Q } from '../constant'
+import { AV_TIME_BASE_Q, NOPTS_VALUE_BIGINT } from '../constant'
 import { getHeap } from '@libmedia/cheap/internal'
 import { object } from '@libmedia/common'
 import { pixelFormatMap, colorPrimariesMap, colorSpaceMap, colorTrcMap } from './constant/webcodecs'
@@ -38,6 +38,9 @@ const colorSpaceMapReverse = object.reverse(colorSpaceMap)
 const colorTrcMapReverse = object.reverse(colorTrcMap)
 
 export function avPixelFormat2Format(pixfmt: AVPixelFormat) {
+  if (pixfmt === AVPixelFormat.AV_PIX_FMT_YUVJ420P) {
+    return 'I420'
+  }
   return pixelFormatMapReverse[pixfmt] ?? null
 }
 
@@ -74,7 +77,7 @@ export function avframe2VideoFrame(avframe: pointer<AVFrame>, pts?: int64, video
     codedHeight: height,
     timestamp: pts ? static_cast<double>(pts) : static_cast<double>(avRescaleQ2(avframe.pts, addressof(avframe.timeBase), AV_TIME_BASE_Q)),
     format: avPixelFormat2Format(avframe.format),
-    duration: static_cast<double>(avRescaleQ2(avframe.duration, addressof(avframe.timeBase), AV_TIME_BASE_Q)),
+    duration: avframe.duration !== NOPTS_VALUE_BIGINT ? static_cast<double>(avRescaleQ2(avframe.duration, addressof(avframe.timeBase), AV_TIME_BASE_Q)) : null,
     layout,
     colorSpace: getVideoColorSpaceInit(avframe),
     visibleRect: {
