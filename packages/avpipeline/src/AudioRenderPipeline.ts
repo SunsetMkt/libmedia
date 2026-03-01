@@ -40,11 +40,11 @@ import {
   avMalloc,
   avMallocz,
   AVPCMBufferPoolImpl,
+  AVSampleFormat,
   type AVPCMBuffer,
   type AVPCMBufferPool,
   type AVPCMBufferRef,
-  type AVSampleFormat
-} from '@libmedia/avutil'
+  avFree } from '@libmedia/avutil'
 
 import {
   AV_MILLI_TIME_BASE_Q
@@ -56,7 +56,8 @@ import {
   type List,
   memcpy,
   memset,
-  mapUint8Array
+  mapUint8Array,
+  mapFloat32Array
 } from '@libmedia/cheap'
 
 import {
@@ -90,6 +91,13 @@ import Pipeline from './Pipeline'
 import type { Timeout } from '@libmedia/common'
 
 const MASTER_SYNC_THRESHOLD = 400n
+const PlanarMap = {
+  [AVSampleFormat.AV_SAMPLE_FMT_DBLP]: AVSampleFormat.AV_SAMPLE_FMT_DBL,
+  [AVSampleFormat.AV_SAMPLE_FMT_FLTP]: AVSampleFormat.AV_SAMPLE_FMT_FLT,
+  [AVSampleFormat.AV_SAMPLE_FMT_S16P]: AVSampleFormat.AV_SAMPLE_FMT_S16,
+  [AVSampleFormat.AV_SAMPLE_FMT_S32P]: AVSampleFormat.AV_SAMPLE_FMT_S32,
+  [AVSampleFormat.AV_SAMPLE_FMT_S64P]: AVSampleFormat.AV_SAMPLE_FMT_S64
+}
 
 export interface AudioRenderTaskOptions extends TaskOptions {
   playSampleRate: int32
@@ -112,7 +120,7 @@ type SelfTask = AudioRenderTaskOptions & {
   resamplerResource: WebAssemblyResource
   stretchpitcherResource: WebAssemblyResource
   resampler: Resampler
-  stretchpitcher: Map<int32, StretchPitcher>
+  stretchpitcher: StretchPitcher
   outPCMBuffer: AVPCMBuffer
 
   waitPCMBuffer: pointer<AVPCMBufferRef>
@@ -151,6 +159,9 @@ type SelfTask = AudioRenderTaskOptions & {
   lastRenderTimestamp: number
 
   avframePool: AVFramePoolImpl
+
+  outputInterleavedData: pointer<float>
+  outputInterleavedSize: int32
 }
 
 export default class AudioRenderPipeline extends Pipeline {
@@ -180,7 +191,7 @@ export default class AudioRenderPipeline extends Pipeline {
       resamplerResource: await compileResource(options.resamplerResource),
       stretchpitcherResource: await compileResource(options.stretchpitcherResource),
       resampler: null,
-      stretchpitcher: new Map(),
+      stretchpitcher: null,
       outPCMBuffer: null,
       waitPCMBuffer: nullptr,
       waitAVFrame: nullptr,
@@ -214,24 +225,10 @@ export default class AudioRenderPipeline extends Pipeline {
 
       lastRenderTimestamp: 0,
 
-      avframePool: new AVFramePoolImpl(accessof(options.avframeList), options.avframeListMutex)
-    }
+      avframePool: new AVFramePoolImpl(accessof(options.avframeList), options.avframeListMutex),
 
-    for (let i = 0; i < options.playChannels; i++) {
-
-      const stretchpitcher = new StretchPitcher({
-        resource: task.stretchpitcherResource
-      })
-
-      task.stretchpitcher.set(i, stretchpitcher)
-
-      await stretchpitcher.open({
-        sampleRate: options.playSampleRate,
-        channels: 1
-      })
-      stretchpitcher.setTempo(task.playTempo)
-      stretchpitcher.setPitch(task.playPitch)
-      stretchpitcher.setRate(task.playRate)
+      outputInterleavedData: nullptr,
+      outputInterleavedSize: 0
     }
 
     const pullNewAudioFrame = async () => {
@@ -245,10 +242,7 @@ export default class AudioRenderPipeline extends Pipeline {
       }
 
       if (audioFrame === IOError.END) {
-        for (let i = 0; i < task.playChannels; i++) {
-          const stretchpitcher = task.stretchpitcher.get(i)
-          stretchpitcher.flush()
-        }
+        task.stretchpitcher?.flush()
         logger.info(`audio render ended, taskId: ${task.taskId}`)
         return IOError.END
       }
@@ -263,6 +257,27 @@ export default class AudioRenderPipeline extends Pipeline {
           || task.enableJitterBuffer
         ) {
           task.useStretchpitcher = true
+          if (!task.stretchpitcher) {
+            const stretchpitcher = new StretchPitcher({
+              resource: task.stretchpitcherResource
+            })
+            task.stretchpitcher = stretchpitcher
+            await stretchpitcher.open({
+              sampleRate: options.playSampleRate,
+              channels: options.playChannels
+            })
+            stretchpitcher.setTempo(task.playTempo)
+            stretchpitcher.setPitch(task.playPitch)
+            stretchpitcher.setRate(task.playRate)
+          }
+          if (task.resampler) {
+            // 重置 resampler，我们需要非 planar 数据
+            const output = task.resampler.getOutputPCMParameters()
+            if (output.format !== PlanarMap[task.playFormat]) {
+              task.resampler.close()
+              task.resampler = null
+            }
+          }
         }
         else {
           task.useStretchpitcher = false
@@ -303,12 +318,15 @@ export default class AudioRenderPipeline extends Pipeline {
         if (audioFrame.sampleRate !== task.playSampleRate
           || audioFrame.format !== task.playFormat
           || audioFrame.chLayout.nbChannels !== task.playChannels
+          || task.useStretchpitcher
         ) {
           if (task.resampler) {
             const current = task.resampler.getInputPCMParameters()
+            const output = task.resampler.getOutputPCMParameters()
             if (current.format !== audioFrame.format
               || current.sampleRate !== audioFrame.sampleRate
               || current.channels !== audioFrame.chLayout.nbChannels
+              || !task.useStretchpitcher && output.format !== task.playFormat
             ) {
               task.resampler.close()
               task.resampler = null
@@ -326,7 +344,7 @@ export default class AudioRenderPipeline extends Pipeline {
               },
               {
                 sampleRate: task.playSampleRate,
-                format: task.playFormat,
+                format: task.useStretchpitcher ? PlanarMap[task.playFormat] : task.playFormat,
                 channels: task.playChannels
               }
             )
@@ -344,47 +362,32 @@ export default class AudioRenderPipeline extends Pipeline {
             task.waitPCMBufferPos = 0
           }
           else {
-            for (let i = 0; i < task.playChannels; i++) {
-              const stretchpitcher = task.stretchpitcher.get(i)
-              stretchpitcher.sendSamples(
-                reinterpret_cast<pointer<float>>(pcmBuffer.data[i]),
-                pcmBuffer.nbSamples
-              )
-            }
+            task.stretchpitcher.sendSamples(
+              reinterpret_cast<pointer<float>>(pcmBuffer.data[0]),
+              pcmBuffer.nbSamples
+            )
             this.avPCMBufferPool.release(pcmBuffer)
           }
         }
         else {
-          if (!task.useStretchpitcher) {
-            let pcmBuffer = this.avPCMBufferPool.alloc()
-
-            if (pcmBuffer.data) {
-              avFreep(addressof(pcmBuffer.data[0]))
-              avFreep(reinterpret_cast<pointer<pointer<void>>>(addressof(pcmBuffer.data)))
-            }
-
-            pcmBuffer.nbSamples = audioFrame.nbSamples
-            pcmBuffer.maxnbSamples = audioFrame.nbSamples
-            pcmBuffer.sampleRate = audioFrame.sampleRate
-            pcmBuffer.channels = audioFrame.chLayout.nbChannels
-            pcmBuffer.data = audioFrame.extendedData
-
-            task.waitAVFrame = audioFrame
-
-            task.waitPCMBuffer = pcmBuffer
-            task.waitPCMBufferPos = 0
-
-            releaseAudioFrame = false
+          let pcmBuffer = this.avPCMBufferPool.alloc()
+          if (pcmBuffer.data) {
+            avFreep(addressof(pcmBuffer.data[0]))
+            avFreep(reinterpret_cast<pointer<pointer<void>>>(addressof(pcmBuffer.data)))
           }
-          else {
-            for (let i = 0; i < task.playChannels; i++) {
-              const stretchpitcher = task.stretchpitcher.get(i)
-              stretchpitcher.sendSamples(
-                reinterpret_cast<pointer<float>>(audioFrame.extendedData[i]),
-                audioFrame.nbSamples
-              )
-            }
-          }
+
+          pcmBuffer.nbSamples = audioFrame.nbSamples
+          pcmBuffer.maxnbSamples = audioFrame.nbSamples
+          pcmBuffer.sampleRate = audioFrame.sampleRate
+          pcmBuffer.channels = audioFrame.chLayout.nbChannels
+          pcmBuffer.data = audioFrame.extendedData
+
+          task.waitAVFrame = audioFrame
+
+          task.waitPCMBuffer = pcmBuffer
+          task.waitPCMBufferPos = 0
+
+          releaseAudioFrame = false
         }
 
         task.stats.sampleRate = audioFrame.sampleRate
@@ -396,6 +399,45 @@ export default class AudioRenderPipeline extends Pipeline {
         }
       }
       return 0
+    }
+
+    const receiveSamplesFrom2Stretchpitcher = (pcmBuffer: pointer<AVPCMBuffer>, receive: int32) => {
+      let ret: int32 = 0
+      if (task.outputInterleavedSize < pcmBuffer.maxnbSamples) {
+        if (task.outputInterleavedData) {
+          avFree(task.outputInterleavedData)
+        }
+        task.outputInterleavedData = avMalloc(reinterpret_cast<size>(pcmBuffer.maxnbSamples) * sizeof(float) * reinterpret_cast<size>(task.playChannels))
+        task.outputInterleavedSize = pcmBuffer.maxnbSamples
+      }
+      ret = task.stretchpitcher.receiveSamples(
+        task.outputInterleavedData,
+        pcmBuffer.maxnbSamples - receive
+      )
+      if (ret <= 0) {
+        return ret
+      }
+
+      const list: Float32Array[] = []
+      for (let i = 0; i < task.playChannels; i++) {
+        list.push(mapFloat32Array(
+          reinterpret_cast<pointer<float>>(pcmBuffer.data[i] + reinterpret_cast<size>(receive) * sizeof(float)),
+          reinterpret_cast<size>(ret)
+        ))
+      }
+      const outputMap = mapFloat32Array(task.outputInterleavedData, reinterpret_cast<size>(ret) * reinterpret_cast<size>(task.playChannels))
+      if (task.playChannels === 1) {
+        list[0].set(outputMap)
+      }
+      else {
+        let offset = 0
+        for (let i = 0; i < ret ; i++) {
+          for (let j = 0; j < task.playChannels; j++) {
+            list[j][i] = outputMap[offset++]
+          }
+        }
+      }
+      return ret
     }
 
     const receiveToPCMBuffer = async (pcmBuffer: pointer<AVPCMBuffer>) => {
@@ -419,15 +461,7 @@ export default class AudioRenderPipeline extends Pipeline {
 
       if (task.ended && task.useStretchpitcher) {
         let ret = 0
-        for (let i = 0; i < task.playChannels; i++) {
-          const stretchpitcher = task.stretchpitcher.get(i)
-          if (pcmBuffer.data[i]) {
-            ret = stretchpitcher.receiveSamples(
-              reinterpret_cast<pointer<float>>(reinterpret_cast<pointer<float>>(pcmBuffer.data[i]) + receive),
-              pcmBuffer.maxnbSamples - receive
-            )
-          }
-        }
+        ret = receiveSamplesFrom2Stretchpitcher(pcmBuffer, receive)
         if (receive + ret < pcmBuffer.maxnbSamples) {
           task.stretchpitcherEnded = true
           for (let i = 0; i < task.playChannels; i++) {
@@ -472,15 +506,7 @@ export default class AudioRenderPipeline extends Pipeline {
           }
         }
         else {
-          for (let i = 0; i < task.playChannels; i++) {
-            const stretchpitcher = task.stretchpitcher.get(i)
-            if (pcmBuffer.data[i]) {
-              len = stretchpitcher.receiveSamples(
-                reinterpret_cast<pointer<float>>(reinterpret_cast<pointer<float>>(pcmBuffer.data[i]) + receive),
-                pcmBuffer.maxnbSamples - receive
-              )
-            }
-          }
+          len = receiveSamplesFrom2Stretchpitcher(pcmBuffer, receive)
         }
 
         receive += len
@@ -490,16 +516,8 @@ export default class AudioRenderPipeline extends Pipeline {
           if (ret === IOError.END) {
             task.ended = true
             if (task.useStretchpitcher) {
-              for (let i = 0; i < task.playChannels; i++) {
-                const stretchpitcher = task.stretchpitcher.get(i)
-                if (pcmBuffer.data[i]) {
-                  stretchpitcher.flush()
-                  ret = stretchpitcher.receiveSamples(
-                    reinterpret_cast<pointer<float>>(reinterpret_cast<pointer<float>>(pcmBuffer.data[i]) + receive),
-                    pcmBuffer.maxnbSamples - receive
-                  )
-                }
-              }
+              task.stretchpitcher.flush()
+              ret = receiveSamplesFrom2Stretchpitcher(pcmBuffer, receive)
               if (receive + ret < pcmBuffer.maxnbSamples) {
                 task.stretchpitcherEnded = true
                 for (let i = 0; i < task.playChannels; i++) {
@@ -650,9 +668,7 @@ export default class AudioRenderPipeline extends Pipeline {
       || task.enableJitterBuffer
 
     if (task.useStretchpitcher && !use) {
-      for (let i = 0; i < task.playChannels; i++) {
-        task.stretchpitcher.get(i).flush()
-      }
+      task.stretchpitcher.flush()
     }
   }
 
@@ -668,9 +684,7 @@ export default class AudioRenderPipeline extends Pipeline {
       }
 
       task.playRate = rate
-      for (let i = 0; i < task.playChannels; i++) {
-        task.stretchpitcher.get(i).setRate(rate)
-      }
+      task.stretchpitcher?.setRate(rate)
       this.checkUseStretchpitcher(task)
       task.masterTimer.setRate(task.playRate * task.playTempo)
       if (task.fakePlay) {
@@ -684,9 +698,7 @@ export default class AudioRenderPipeline extends Pipeline {
     const task = this.tasks.get(taskId)
     if (task) {
       task.playTempo = tempo
-      for (let i = 0; i < task.playChannels; i++) {
-        task.stretchpitcher.get(i).setTempo(tempo)
-      }
+      task.stretchpitcher?.setTempo(tempo)
       this.checkUseStretchpitcher(task)
       task.masterTimer.setRate(task.playRate * task.playTempo)
       if (task.fakePlay) {
@@ -700,9 +712,7 @@ export default class AudioRenderPipeline extends Pipeline {
     const task = this.tasks.get(taskId)
     if (task) {
       task.playPitch = pitch
-      for (let i = 0; i < task.playChannels; i++) {
-        task.stretchpitcher.get(i).setPitch(pitch)
-      }
+      task.stretchpitcher?.setPitch(pitch)
       this.checkUseStretchpitcher(task)
     }
   }
@@ -722,10 +732,8 @@ export default class AudioRenderPipeline extends Pipeline {
 
       task.seeking = true
 
-      if (task.stretchpitcher.size) {
-        for (const key of task.stretchpitcher.keys()) {
-          task.stretchpitcher.get(key).clear()
-        }
+      if (task.stretchpitcher) {
+        task.stretchpitcher.clear()
       }
       if (task.waitPCMBuffer) {
         if (task.waitAVFrame) {
@@ -849,10 +857,8 @@ export default class AudioRenderPipeline extends Pipeline {
       task.ended = false
       task.firstPlayed = false
       task.stretchpitcherEnded = false
-      if (task.stretchpitcher?.size) {
-        for (let i = 0; i < task.playChannels; i++) {
-          task.stretchpitcher.get(i)?.clear()
-        }
+      if (task.stretchpitcher) {
+        task.stretchpitcher.clear()
       }
       this.clearFakePlayTimer(task)
       task.fakePlaySamples = 0n
@@ -883,7 +889,7 @@ export default class AudioRenderPipeline extends Pipeline {
   }
 
   private syncPts(task: SelfTask, maxnbSamples: int32) {
-    const latency = (((task.useStretchpitcher ? task.stretchpitcher.get(0).getLatency() : 0)
+    const latency = (((task.useStretchpitcher ? task.stretchpitcher.getLatency() : 0)
         // 双缓冲，假定后缓冲播放到中间
         + (maxnbSamples * 3 >>> 1)) / task.playSampleRate * 1000) >>> 0
     const currentPts = bigint.max(task.currentPTS - static_cast<int64>(latency), 0n)
@@ -1072,10 +1078,8 @@ export default class AudioRenderPipeline extends Pipeline {
       if (task.resampler) {
         task.resampler.close()
       }
-      if (task.stretchpitcher.size) {
-        for (const key of task.stretchpitcher.keys()) {
-          task.stretchpitcher.get(key).close()
-        }
+      if (task.stretchpitcher) {
+        task.stretchpitcher.close()
         task.stretchpitcher.clear()
       }
       if (task.outPCMBuffer) {
@@ -1109,6 +1113,9 @@ export default class AudioRenderPipeline extends Pipeline {
       if (task.controlIPCPort) {
         task.controlIPCPort.destroy()
         task.controlIPCPort = null
+      }
+      if (task.outputInterleavedData) {
+        avFree(task.outputInterleavedData)
       }
       this.tasks.delete(taskId)
       logger.debug(`unregisterTask task, taskId: ${taskId}`)
