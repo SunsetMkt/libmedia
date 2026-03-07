@@ -96,7 +96,8 @@ const PlanarMap = {
   [AVSampleFormat.AV_SAMPLE_FMT_FLTP]: AVSampleFormat.AV_SAMPLE_FMT_FLT,
   [AVSampleFormat.AV_SAMPLE_FMT_S16P]: AVSampleFormat.AV_SAMPLE_FMT_S16,
   [AVSampleFormat.AV_SAMPLE_FMT_S32P]: AVSampleFormat.AV_SAMPLE_FMT_S32,
-  [AVSampleFormat.AV_SAMPLE_FMT_S64P]: AVSampleFormat.AV_SAMPLE_FMT_S64
+  [AVSampleFormat.AV_SAMPLE_FMT_S64P]: AVSampleFormat.AV_SAMPLE_FMT_S64,
+  [AVSampleFormat.AV_SAMPLE_FMT_U8]: AVSampleFormat.AV_SAMPLE_FMT_U8
 }
 
 export interface AudioRenderTaskOptions extends TaskOptions {
@@ -401,7 +402,7 @@ export default class AudioRenderPipeline extends Pipeline {
       return 0
     }
 
-    const receiveSamplesFrom2Stretchpitcher = (pcmBuffer: pointer<AVPCMBuffer>, receive: int32) => {
+    const receiveSamplesFromStretchpitcher = (pcmBuffer: pointer<AVPCMBuffer>, receive: int32) => {
       let ret: int32 = 0
       if (task.outputInterleavedSize < pcmBuffer.maxnbSamples) {
         if (task.outputInterleavedData) {
@@ -461,7 +462,7 @@ export default class AudioRenderPipeline extends Pipeline {
 
       if (task.ended && task.useStretchpitcher) {
         let ret = 0
-        ret = receiveSamplesFrom2Stretchpitcher(pcmBuffer, receive)
+        ret = receiveSamplesFromStretchpitcher(pcmBuffer, receive)
         if (receive + ret < pcmBuffer.maxnbSamples) {
           task.stretchpitcherEnded = true
           for (let i = 0; i < task.playChannels; i++) {
@@ -506,7 +507,7 @@ export default class AudioRenderPipeline extends Pipeline {
           }
         }
         else {
-          len = receiveSamplesFrom2Stretchpitcher(pcmBuffer, receive)
+          len = receiveSamplesFromStretchpitcher(pcmBuffer, receive)
         }
 
         receive += len
@@ -517,7 +518,7 @@ export default class AudioRenderPipeline extends Pipeline {
             task.ended = true
             if (task.useStretchpitcher) {
               task.stretchpitcher.flush()
-              ret = receiveSamplesFrom2Stretchpitcher(pcmBuffer, receive)
+              ret = receiveSamplesFromStretchpitcher(pcmBuffer, receive)
               if (receive + ret < pcmBuffer.maxnbSamples) {
                 task.stretchpitcherEnded = true
                 for (let i = 0; i < task.playChannels; i++) {
