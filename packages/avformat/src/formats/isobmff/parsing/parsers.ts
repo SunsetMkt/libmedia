@@ -69,6 +69,7 @@ import ispe from './ispe'
 import pitm from './pitm'
 import irot from './irot'
 import imir from './imir'
+import pasp from './pasp'
 
 import hvcc from './hvcc'
 import av1c from './av1c'
@@ -93,6 +94,7 @@ number,
   [mktag(BoxType.HDLR)]: hdlr,
   [mktag(BoxType.STSD)]: stsd,
   [mktag(BoxType.ELST)]: elst,
+  [mktag(BoxType.PASP)]: pasp,
 
   [mktag(BoxType.TREX)]: trex,
   [mktag(BoxType.MFHD)]: mfhd,
