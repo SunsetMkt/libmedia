@@ -613,7 +613,6 @@
           const container = mediaStreamModeComponent.mediaStreamMode ? new MediaStream() : document.querySelector(id)
           player = new AVPlayer({
             container,
-            isLive: isLiveComponent.isLive,
             getWasm: (type, codecId) => {
               switch (type) {
                 case 'decoder': {
