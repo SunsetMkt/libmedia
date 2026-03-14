@@ -70,7 +70,7 @@ feat:
 
 bugfix:
   - fix(avformat): ts 对跨 pes 的 nalu 判断前置 sei 为一帧的开始
-  - fix(avplayer): mes 支持 audio extradata 变化
+  - fix(avplayer): mse 支持 audio extradata 变化
   - fix(avutil): AVPacket 和 EncodedChunk 直接转换处理 duration
   - fix(avplayer): 音频或者视频不支持解码忽略而不是报错
 
