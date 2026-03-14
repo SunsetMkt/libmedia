@@ -736,7 +736,7 @@
                   return `../dist/stretchpitch/stretchpitch${(enableSimdComponent.enableSimd) ? '-simd' : (supportAtomic ? defaultVersion : '')}.wasm`
               }
             },
-            checkUseMES: (streams) => {
+            checkUseMSE: (streams) => {
               return useMseComponent.useMse
             },
             enableHardware: enableHardwareComponent.enableHardwareAcceleration,

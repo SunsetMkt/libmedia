@@ -273,7 +273,7 @@ export interface AVPlayerOptions {
   /**
    * 自定义检查是否使用 mse 模式
    */
-  checkUseMES?: (streams: AVStreamInterface[]) => boolean
+  checkUseMSE?: (streams: AVStreamInterface[]) => boolean
   /**
    * 是否启用硬件加速
    */
@@ -848,8 +848,8 @@ export default class AVPlayer extends Emitter implements ControllerObserver {
         return false
       }
 
-      if (this.options.checkUseMES) {
-        return this.options.checkUseMES(this.formatContext.streams)
+      if (this.options.checkUseMSE) {
+        return this.options.checkUseMSE(this.formatContext.streams)
       }
 
       if (videoStream && options.video) {
