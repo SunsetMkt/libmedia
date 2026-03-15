@@ -431,10 +431,36 @@ export default class AudioRenderPipeline extends Pipeline {
         list[0].set(outputMap)
       }
       else {
-        let offset = 0
-        for (let i = 0; i < ret ; i++) {
-          for (let j = 0; j < task.playChannels; j++) {
-            list[j][i] = outputMap[offset++]
+        // let offset = 0
+        // for (let i = 0; i < ret ; i++) {
+        //   for (let j = 0; j < task.playChannels; j++) {
+        //     list[j][i] = outputMap[offset++]
+        //   }
+        // }
+
+        /**
+         * 下面是实现速度更快
+         */
+        let channels = task.playChannels
+        for (let i = 0; i < task.playChannels; i++) {
+          let src = i
+          let j = 0
+          let n = ret & ~3
+
+          for (; j < n; j += 4) {
+            list[i][j] = outputMap[src]
+            src += channels
+            list[i][j + 1] = outputMap[src]
+            src += channels
+            list[i][j + 2] = outputMap[src]
+            src += channels
+            list[i][j + 3] = outputMap[src]
+            src += channels
+          }
+
+          for (; j < ret; j++) {
+            list[i][j] = outputMap[src]
+            src += channels
           }
         }
       }
