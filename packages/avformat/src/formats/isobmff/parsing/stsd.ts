@@ -230,7 +230,7 @@ export default async function read(ioReader: IOReader, stream: AVStream, atom: A
           if (isobmffContext.parsers && isobmffContext.parsers[type]) {
             await isobmffContext.parsers[type](
               ioReader,
-              null,
+              stream,
               {
                 type,
                 size: size - 8
